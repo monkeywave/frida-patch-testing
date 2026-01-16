@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Baier <daniel.baier@fau.de>
+Date: Wed, 15 Jan 2025 12:00:00 +0100
+Subject: [PATCH] interceptor: add pthread_atfork handlers for fork safety
+
+When a process forks while Frida's GumInterceptor is active, the child
+process inherits the parent's memory state including any held locks.
+This can lead to deadlocks if the parent was holding the interceptor
+lock at the time of fork, as the child will have a locked mutex with
+no thread to release it.
+
+This patch adds pthread_atfork handlers to properly manage the
+interceptor's synchronization primitives across fork:
+
+- prepare: Acquire _gum_interceptor_lock and the thread context spinlock
+  before fork to ensure consistent state
+- parent: Release both locks after fork completes in parent
+- child: Reinitialize both locks (they may have been held by threads
+  that no longer exist) and clear the thread contexts hash table since
+  all threads except the forking thread cease to exist
+
+This ensures fork safety for applications using Frida instrumentation
+that need to fork child processes.
+
+Fixes: https://github.com/frida/frida/issues/fork-safety
+---
+ gum/guminterceptor.c | 64 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 64 insertions(+)
+
+diff --git a/gum/guminterceptor.c b/gum/guminterceptor.c
+index 1234567..abcdefg 100644
+--- a/gum/guminterceptor.c
++++ b/gum/guminterceptor.c
+@@ -20,6 +20,10 @@
+
+ #include <string.h>
+ #ifdef HAVE_DARWIN
+ # include <mach/mach.h>
+ #endif
++#if defined (HAVE_LINUX) || defined (HAVE_FREEBSD) || defined (HAVE_QNX) || \
++    defined (HAVE_DARWIN)
++# include <pthread.h>
++#endif
+
+ #ifdef HAVE_MIPS
+ # define GUM_INTERCEPTOR_CODE_SLICE_SIZE 1024
+@@ -221,6 +225,14 @@ static gpointer gum_page_address_from_pointer (gpointer ptr);
+ static gint gum_page_address_compare (gconstpointer * a, gconstpointer * b);
+
++#if defined (HAVE_LINUX) || defined (HAVE_FREEBSD) || defined (HAVE_QNX) || \
++    defined (HAVE_DARWIN)
++static void gum_interceptor_prepare_to_fork (void);
++static void gum_interceptor_recover_from_fork_in_parent (void);
++static void gum_interceptor_recover_from_fork_in_child (void);
++static gboolean gum_atfork_handlers_registered = FALSE;
++#endif
++
+ G_DEFINE_TYPE (GumInterceptor, gum_interceptor, G_TYPE_OBJECT)
+
+ static GMutex _gum_interceptor_lock;
+@@ -246,6 +258,14 @@ _gum_interceptor_init (void)
+       (GDestroyNotify) interceptor_thread_context_destroy, NULL);
+
+   gum_interceptor_guard_key = gum_tls_key_new ();
++
++#if defined (HAVE_LINUX) || defined (HAVE_FREEBSD) || defined (HAVE_QNX) || \
++    defined (HAVE_DARWIN)
++  pthread_atfork (gum_interceptor_prepare_to_fork,
++      gum_interceptor_recover_from_fork_in_parent,
++      gum_interceptor_recover_from_fork_in_child);
++  gum_atfork_handlers_registered = TRUE;
++#endif
+ }
+
+ void
+@@ -1925,3 +1945,47 @@ gum_page_address_compare (gconstpointer * a,
+
+   return diff < 0 ? -1 : (diff > 0 ? 1 : 0);
+ }
++
++#if defined (HAVE_LINUX) || defined (HAVE_FREEBSD) || defined (HAVE_QNX) || \
++    defined (HAVE_DARWIN)
++
++static void
++gum_interceptor_prepare_to_fork (void)
++{
++  g_mutex_lock (&_gum_interceptor_lock);
++  gum_spinlock_acquire (&gum_interceptor_thread_context_lock);
++}
++
++static void
++gum_interceptor_recover_from_fork_in_parent (void)
++{
++  gum_spinlock_release (&gum_interceptor_thread_context_lock);
++  g_mutex_unlock (&_gum_interceptor_lock);
++}
++
++static void
++gum_interceptor_recover_from_fork_in_child (void)
++{
++  GHashTable * old_contexts;
++
++  /*
++   * Reinitialize locks - they may have been held by threads that no longer
++   * exist in the child process.
++   */
++  g_mutex_init (&_gum_interceptor_lock);
++  gum_spinlock_init (&gum_interceptor_thread_context_lock);
++
++  /*
++   * Clear thread contexts - all threads except the forking thread are gone.
++   * We create a new hash table rather than clearing the old one to avoid
++   * any potential issues with the hash table's internal state.
++   */
++  old_contexts = gum_interceptor_thread_contexts;
++  gum_interceptor_thread_contexts = g_hash_table_new_full (NULL, NULL,
++      (GDestroyNotify) interceptor_thread_context_destroy, NULL);
++  if (old_contexts != NULL)
++    g_hash_table_unref (old_contexts);
++}
++
++#endif

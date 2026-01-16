@@ -1,0 +1,54 @@
+# Frida Patch Testing Framework - Default Configuration
+# Copy to config.yaml and customize
+
+frida:
+  # Version to build: "latest" or specific tag like "16.5.2"
+  version: "latest"
+
+  # Base repository (usually don't change this)
+  repository: "https://github.com/frida/frida.git"
+
+# Component configuration
+# For each component, choose ONE of:
+#   1. source: "official" + patches (default)
+#   2. source: "custom" + repository URL
+
+components:
+  frida-gum:
+    source: "official"
+    patches: true  # Apply patches from patches/frida-gum/
+
+  frida-core:
+    source: "official"
+    patches: true
+
+  frida-python:
+    source: "official"
+    patches: true
+
+  frida-tools:
+    source: "official"
+    patches: true
+
+# Build configuration
+build:
+  # What to build
+  targets:
+    - frida-server
+    - frida-python
+    - frida-tools
+
+  # Architecture: "auto", "arm64", or "x86_64"
+  architecture: "auto"
+
+  # Enable debug symbols
+  debug: false
+
+# Output configuration
+output:
+  directory: "./output"
+  # Copy specific files to output
+  artifacts:
+    - frida-server
+    - frida (python module)
+    - frida-tools (CLI)

@@ -1,0 +1,30 @@
+From: Your Name <your.email@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] component: brief description of what this patch does
+
+A more detailed explanation of the change. This should explain:
+- What problem does this solve?
+- How does the fix work?
+- Any side effects or considerations
+
+This is a template - replace all placeholder content with your actual changes.
+
+---
+ path/to/file.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/path/to/file.c b/path/to/file.c
+index 0000000..1111111 100644
+--- a/path/to/file.c
++++ b/path/to/file.c
+@@ -100,6 +100,11 @@ existing_function_name (ParameterType * param)
+ {
+   /* existing code here */
+   existing_call ();
++
++  /*
++   * Your new code goes here
++   * Explain what this addition does
++   */
++  your_new_function_call ();
+ }

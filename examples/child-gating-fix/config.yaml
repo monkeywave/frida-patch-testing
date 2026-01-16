@@ -1,0 +1,62 @@
+# Child-Gating Fix Example Configuration
+#
+# This configuration builds Frida with patches that fix the
+# child-gating freeze issue on Linux.
+#
+# The patches address two problems:
+# 1. pthread mutex state not properly handled across fork()
+# 2. Infinite timeout in DBus wait operations during child-gating
+#
+# Usage:
+#   cp examples/child-gating-fix/config.yaml config.yaml
+#   cp -r examples/child-gating-fix/patches/* patches/
+#   ./build/run.sh
+
+frida:
+  version: "latest"
+  repository: "https://github.com/frida/frida.git"
+
+components:
+  # Apply the pthread_atfork handler patch
+  # This patch adds fork safety handlers to GumInterceptor to properly
+  # manage lock state when the process forks.
+  frida-gum:
+    source: "official"
+    patches: true
+
+  # Apply the timeout patch
+  # This patch adds a configurable timeout (30s default) to the
+  # child-gating wait mechanism to prevent indefinite hangs.
+  frida-core:
+    source: "official"
+    patches: true
+
+  # No patches needed for Python bindings
+  frida-python:
+    source: "official"
+    patches: false
+
+  # No patches needed for tools
+  frida-tools:
+    source: "official"
+    patches: false
+
+build:
+  targets:
+    - frida-server
+  architecture: "auto"
+  debug: false
+  # Optional: enable verbose build output for debugging
+  # verbose: true
+
+output:
+  directory: "./output"
+  artifacts:
+    - frida-server
+    # Optionally include other artifacts:
+    # - frida-inject
+    # - frida-gadget
+
+# Optional: Environment variables for the build
+# environment:
+#   FRIDA_CHILD_GATING_TIMEOUT: "30"

@@ -1,0 +1,53 @@
+# Frida Patch Testing Framework - Example Configuration
+#
+# This example shows how to use a custom fork of frida-gum
+# while using official repositories (with patches) for other components.
+#
+# Use Cases:
+#   1. Testing your own fork before submitting a PR
+#   2. Testing patches from others
+#   3. Building with specific modifications
+
+frida:
+  # Version: "latest" clones the default branch
+  # Or specify a tag like "16.5.2" for a specific release
+  version: "latest"
+
+components:
+  # Example: Using a custom fork for frida-gum
+  frida-gum:
+    source: "custom"
+    repository: "https://github.com/YOUR_USERNAME/frida-gum"
+    branch: "my-feature-branch"  # Optional, defaults to main/master
+
+  # Example: Official with patches enabled
+  frida-core:
+    source: "official"
+    patches: true  # Applies all patches from patches/frida-core/
+
+  # Example: Official without patches
+  frida-python:
+    source: "official"
+    patches: false  # Skip patches for this component
+
+  # Example: Another custom fork
+  frida-tools:
+    source: "official"
+    patches: true
+
+build:
+  # Available targets: frida-server, frida-python, frida-tools
+  targets:
+    - frida-server
+
+  # "auto" detects host architecture
+  # Or specify: "arm64", "x86_64"
+  architecture: "auto"
+
+  # Enable for debugging Frida itself
+  debug: false
+
+output:
+  directory: "./output"
+  artifacts:
+    - frida-server

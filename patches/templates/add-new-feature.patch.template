@@ -1,0 +1,61 @@
+From: Your Name <your.email@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] component: add new feature description
+
+Detailed description of the new feature being added.
+
+Features:
+- Feature point 1
+- Feature point 2
+
+Usage:
+- How to use the new feature
+
+---
+ path/to/header.h |  5 +++++
+ path/to/source.c | 25 +++++++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/path/to/header.h b/path/to/header.h
+index 0000000..1111111 100644
+--- a/path/to/header.h
++++ b/path/to/header.h
+@@ -50,6 +50,11 @@ typedef struct _ExistingStruct ExistingStruct;
+
+ void existing_function (void);
+
++/*
++ * New feature declarations
++ */
++void new_feature_function (const char * parameter);
++int new_feature_helper (void);
++
+ #endif /* __HEADER_H__ */
+
+diff --git a/path/to/source.c b/path/to/source.c
+index 2222222..3333333 100644
+--- a/path/to/source.c
++++ b/path/to/source.c
+@@ -200,3 +200,28 @@ existing_function (void)
+ {
+   /* existing implementation */
+ }
++
++/*
++ * New feature implementation
++ */
++void
++new_feature_function (const char * parameter)
++{
++  /* Implementation goes here */
++  g_return_if_fail (parameter != NULL);
++
++  /* Your implementation */
++}
++
++int
++new_feature_helper (void)
++{
++  /* Helper implementation */
++  return 0;
++}

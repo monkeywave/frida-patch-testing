@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Baier <daniel.baier@research.net>
+Date: Wed, 15 Jan 2026 12:00:00 +0000
+Subject: [PATCH] agent: add timeout to child-gating wait to prevent infinite
+ hangs
+
+This patch addresses an issue where Frida's child-gating mechanism can
+hang indefinitely when waiting for permission to resume after a fork.
+
+The problem occurs in two places:
+1. The DBus proxy timeout is set to int.MAX (infinite) when calling
+   wait_for_permission_to_resume(), which can block forever if the
+   controller doesn't respond.
+2. The condition variable wait in recover_from_fork() has no timeout,
+   so if finish_recovery_from_fork() never signals the condition (e.g.,
+   due to a connection issue), the process hangs forever.
+
+This patch:
+- Replaces int.MAX timeout with a 30-second timeout for DBus calls
+- Adds timeout-based waiting using wait_until() with GLib.get_monotonic_time()
+- Logs warnings when timeouts occur instead of hanging
+- Continues execution gracefully after timeout to prevent deadlocks
+
+This is particularly important for scenarios where:
+- The Frida host disconnects during a fork operation
+- Network issues prevent the controller from responding
+- The controller crashes or becomes unresponsive
+---
+ lib/agent/agent.vala | 58 ++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 48 insertions(+), 10 deletions(-)
+
+diff --git a/lib/agent/agent.vala b/lib/agent/agent.vala
+index 1111111..2222222 100644
+--- a/lib/agent/agent.vala
++++ b/lib/agent/agent.vala
+@@ -104,6 +104,9 @@ namespace Frida.Agent {
+
+ 		private delegate void CompletionNotify ();
+
++		private const int CHILD_GATING_TIMEOUT_SEC = 30;
++		private const int CHILD_GATING_TIMEOUT_MSEC = CHILD_GATING_TIMEOUT_SEC * 1000;
++
+ 		private enum TransitionRecoveryState {
+ 			RECOVERING,
+ 			RECOVERED
+@@ -464,8 +467,19 @@ namespace Frida.Agent {
+ 				return false;
+ 			});
+
+-			while (transition_recovery_state != RECOVERED)
+-				transition_cond.wait (transition_mutex);
++			int64 deadline = GLib.get_monotonic_time () + (CHILD_GATING_TIMEOUT_SEC * GLib.TimeSpan.SECOND);
++			while (transition_recovery_state != RECOVERED) {
++				if (!transition_cond.wait_until (transition_mutex, deadline)) {
++					GLib.warning ("Child-gating recovery timed out after %d seconds in recover_from_fork(), " +
++						"forcing continue to prevent deadlock (actor=%s, pid=%u)",
++						CHILD_GATING_TIMEOUT_SEC,
++						(actor == PARENT) ? "PARENT" : "CHILD",
++						get_process_id ());
++					transition_recovery_state = RECOVERED;
++					break;
++				}
++			}
+
+ 			transition_mutex.unlock ();
+
+@@ -559,12 +573,24 @@ namespace Frida.Agent {
+
+ 			var controller_proxy = controller as DBusProxy;
+ 			var previous_timeout = controller_proxy.get_default_timeout ();
+-			controller_proxy.set_default_timeout (int.MAX);
++			controller_proxy.set_default_timeout (CHILD_GATING_TIMEOUT_MSEC);
+ 			try {
+ 				yield controller.wait_for_permission_to_resume (fork_child_id, info, null);
+ 			} catch (GLib.Error e) {
+-				// The connection will/did get closed and we will unload...
++				if (e is IOError.TIMED_OUT) {
++					GLib.warning ("Timed out waiting for permission to resume after fork " +
++						"(child_pid=%u, parent_pid=%u, timeout=%dms). Continuing without permission.",
++						fork_child_pid, fork_parent_pid, CHILD_GATING_TIMEOUT_MSEC);
++				} else {
++					GLib.debug ("Error waiting for permission to resume after fork: %s. " +
++						"The connection will/did get closed and we will unload...", e.message);
++				}
+ 			}
++			/*
++			 * Always restore the previous timeout, even if an error occurred,
++			 * to maintain consistent proxy state.
++			 */
+ 			controller_proxy.set_default_timeout (previous_timeout);
+ 		}
+
+@@ -632,8 +658,19 @@ namespace Frida.Agent {
+ 				return false;
+ 			});
+
+-			while (transition_recovery_state != RECOVERED)
+-				transition_cond.wait (transition_mutex);
++			int64 deadline = GLib.get_monotonic_time () + (CHILD_GATING_TIMEOUT_SEC * GLib.TimeSpan.SECOND);
++			while (transition_recovery_state != RECOVERED) {
++				if (!transition_cond.wait_until (transition_mutex, deadline)) {
++					GLib.warning ("Child-gating recovery timed out after %d seconds in " +
++						"recover_from_specialization(), forcing continue to prevent deadlock (pid=%u)",
++						CHILD_GATING_TIMEOUT_SEC,
++						get_process_id ());
++					transition_recovery_state = RECOVERED;
++					break;
++				}
++			}
+
+ 			transition_mutex.unlock ();
+ 		}
+@@ -668,12 +705,13 @@ namespace Frida.Agent {
+
+ 			var controller_proxy = controller as DBusProxy;
+ 			var previous_timeout = controller_proxy.get_default_timeout ();
+-			controller_proxy.set_default_timeout (int.MAX);
++			controller_proxy.set_default_timeout (CHILD_GATING_TIMEOUT_MSEC);
+ 			try {
+ 				yield controller.wait_for_permission_to_resume (specialized_child_id, info, null);
+ 			} catch (GLib.Error e) {
+-				// The connection will/did get closed and we will unload...
++				GLib.debug ("Error waiting for permission to resume after specialization: %s", e.message);
+ 			}
++			controller_proxy.set_default_timeout (previous_timeout);
+
+ 			specialized_child_id = HostChildId (0);
+ 			specialized_injectee_id = 0;
+--
+2.39.0
+
