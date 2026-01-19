@@ -82,7 +82,64 @@ cp -r examples/child-gating-fix/patches/* patches/
 
 ## Testing the Fix
 
-After building, test with a multi-threaded application that uses fork():
+A complete test suite is provided in the `tests/` directory.
+
+### Quick Test (Recommended)
+
+```bash
+# 1. Ensure frida-server is running
+sudo ./output/frida-server-linux-x86_64 &
+
+# 2. Run the automated test
+cd examples/child-gating-fix/tests
+./test-child-gating.sh
+```
+
+The helper script will:
+- Compile the test binary if needed
+- Verify frida-server is running
+- Run the child-gating test
+- Report pass/fail results
+
+### Manual Test Steps
+
+```bash
+# 1. Install frida-python (stock pip version works)
+pip3 install frida frida-tools
+
+# 2. Start patched frida-server
+sudo ./output/frida-server-linux-x86_64 &
+
+# 3. Verify connection
+frida-ps
+
+# 4. Compile and run test
+cd examples/child-gating-fix/tests
+gcc -pthread -o test_fork test_fork.c
+python3 test_child_gating.py
+```
+
+### Test Files
+
+| File | Description |
+|------|-------------|
+| `tests/test_fork.c` | Multi-threaded C program that forks while holding locks |
+| `tests/test_child_gating.py` | Python script that enables child-gating and monitors fork events |
+| `tests/test-child-gating.sh` | Helper script that automates the entire test process |
+
+### Expected Results
+
+**With patched frida-server:**
+- Child processes are detected via `on_child_added` callback
+- `device.resume(child.pid)` completes without hanging
+- Test reports "PASS - Child-gating working correctly!"
+
+**Without patch (original Frida):**
+- Child processes may freeze indefinitely
+- Stuck in futex syscall with 0% CPU
+- Test times out or hangs
+
+### Basic Example
 
 ```python
 import frida
@@ -90,25 +147,31 @@ import frida
 def on_child_added(child):
     print(f"Child added: {child.pid}")
     # With the fix, this won't hang
-    session.resume(child.pid)
+    device.resume(child.pid)
 
-session = frida.attach("target-process")
+device = frida.get_local_device()
+device.on("child-added", on_child_added)
+
+pid = device.spawn(["./test_fork"])
+session = device.attach(pid)
 session.enable_child_gating()
-session.on("child-added", on_child_added)
+device.resume(pid)
 ```
 
 ### Test Scenario: Multi-threaded Fork
 
-Create a test program that:
-1. Spawns multiple threads that acquire locks
+The test program (`tests/test_fork.c`):
+1. Spawns multiple threads that continuously acquire locks
 2. Forks from the main thread while locks are held
-3. The child process should not deadlock with the patched Frida
+3. The child process attempts to acquire the lock
+4. Without the fix, the child deadlocks; with the fix, it completes
 
 ```c
 // test_fork.c - Compile with: gcc -pthread -o test_fork test_fork.c
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <sys/wait.h>
 
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -125,12 +188,13 @@ int main() {
     pthread_t thread;
     pthread_create(&thread, NULL, thread_func, NULL);
 
+    printf("Parent PID: %d\n", getpid());
     sleep(1);  // Let thread start
 
     pid_t pid = fork();
     if (pid == 0) {
         // Child - without the fix, this could deadlock
-        printf("Child process running\n");
+        printf("Child process running (PID: %d)\n", getpid());
         sleep(2);
         printf("Child process done\n");
     } else {
@@ -184,6 +248,29 @@ You can modify this value if you need longer or shorter timeouts for your use ca
 - Frida Issue: Child-gating causes process freeze on Linux
 - Root cause: pthread mutex state not properly handled across fork()
 - Additional cause: Infinite timeout in DBus wait operations
+
+## Architecture Notes
+
+**Important**: The patches run inside the frida-server/agent, not in frida-python:
+- `frida-gum` patch (pthread_atfork handlers): Runs in the **injected agent** inside the target process
+- `frida-core` patch (30-second timeout): Runs in the **agent** inside the target process
+
+This means **stock pip-installed `frida-python` works** with the patched frida-server because the patches execute server-side in the agent code.
+
+| Component | Patched? | Where Patch Runs |
+|-----------|----------|------------------|
+| frida-server | YES | Server binary (must use patched version) |
+| frida-python | NO (stock is fine) | Client connects to patched server |
+| frida-tools | NO (stock is fine) | CLI tools work with patched server |
+
+## Verification Checklist
+
+Before testing, verify:
+- [ ] frida-server version matches frida-python version (`frida --version` vs `./frida-server --version`)
+- [ ] frida-server is running (`frida-ps` returns process list)
+- [ ] Test program compiles and runs standalone (`./test_fork`)
+- [ ] Child gating test detects fork events
+- [ ] Child processes resume successfully (no freeze)
 
 ## Compatibility
 
